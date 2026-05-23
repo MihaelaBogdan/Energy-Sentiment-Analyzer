@@ -372,14 +372,14 @@ if page == 'Live Dashboard':
 
 elif page == 'Evoluție istorică':
     st.title("Evoluție Istorică & Selector Dynamic de Parametri")
-    st.markdown("Vizualizează corelațiile din datele noastre istorice reale (anul 2015). Alege parametrii și intervalul exact pe care dorești să le afișezi.")
+    st.markdown("Vizualizează corelațiile din datele noastre istorice reale (2025-2026). Alege parametrii și intervalul exact pe care dorești să le afișezi.")
     
     # Premium Date Range Picker
-    min_date = df.index.min().date()
+    min_date = datetime.date(2025, 1, 1)
     max_date = df.index.max().date()
     
     st.markdown("#### Selectorul de interval temporal de interes:")
-    selected_dates = st.slider("Interval Temporal (Datele acoperă 2015):", min_value=min_date, max_value=max_date, value=(min_date, max_date), format="DD.MM.YYYY")
+    selected_dates = st.slider("Interval Temporal (Datele acoperă 2025-2026):", min_value=min_date, max_value=max_date, value=(min_date, max_date), format="DD.MM.YYYY")
     
     if isinstance(selected_dates, tuple) and len(selected_dates) == 2:
         start_date, end_date = selected_dates
@@ -1030,11 +1030,11 @@ NOTE: PROCEDURE HPFOREST used (Total process time):
             st.markdown("### Analiză Comparativă a Predicțiilor SAS în Timp (REG vs. HPFOREST)")
             st.caption("Alege intervalul calendaristic pentru a vedea potrivirea în timp real a ambelor proceduri SAS comparativ cu prețul real spot:")
             
-            min_date = df.index.min().date()
+            min_date = datetime.date(2025, 1, 1)
             max_date = df.index.max().date()
             
             selected_dates_sas = st.slider(
-                "Interval vizualizare comparativă (anul 2015):",
+                "Interval vizualizare comparativă (2025-2026):",
                 min_value=min_date,
                 max_value=max_date,
                 value=(min_date, max_date),
