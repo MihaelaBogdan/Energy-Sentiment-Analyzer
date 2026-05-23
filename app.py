@@ -379,7 +379,7 @@ elif page == 'Evoluție istorică':
     max_date = df.index.max().date()
     
     st.markdown("#### Selectorul de interval temporal de interes:")
-    selected_dates = st.date_input("Interval Temporal (Datele acoperă 2015):", value=(min_date, max_date), min_value=min_date, max_value=max_date)
+    selected_dates = st.slider("Interval Temporal (Datele acoperă 2015):", min_value=min_date, max_value=max_date, value=(min_date, max_date), format="DD.MM.YYYY")
     
     if isinstance(selected_dates, tuple) and len(selected_dates) == 2:
         start_date, end_date = selected_dates
@@ -1033,11 +1033,12 @@ NOTE: PROCEDURE HPFOREST used (Total process time):
             min_date = df.index.min().date()
             max_date = df.index.max().date()
             
-            selected_dates_sas = st.date_input(
+            selected_dates_sas = st.slider(
                 "Interval vizualizare comparativă (anul 2015):",
-                value=(min_date, max_date),
                 min_value=min_date,
                 max_value=max_date,
+                value=(min_date, max_date),
+                format="DD.MM.YYYY",
                 key="sas_dates_picker"
             )
             
