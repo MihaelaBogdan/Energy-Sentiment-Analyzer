@@ -272,7 +272,7 @@ if page == 'Live Dashboard':
             
     # List of live parsed articles
     if live_articles:
-        with st.expander("Vezi cele 50 de articole analizate în direct din feed-ul Economica.net"):
+        with st.expander("Vezi articolele analizate din feed-ul Economica.net"):
             art_df = pd.DataFrame(live_articles)
             st.dataframe(art_df[["Titlu", "Stare", "Scor"]], use_container_width=True)
             
