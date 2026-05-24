@@ -157,14 +157,12 @@ if df.empty:
     st.error("Datele nu au putut fi încărcate. Verifică fișierul DateFormatInitial.csv.")
     st.stop()
 
-# Helper for glassmorphic style containers
 def glass_container(content_html):
     st.markdown(f'<div class="glass-card">{content_html}</div>', unsafe_allow_html=True)
 
 if page == 'Live Dashboard':
     st.title("Live Dashboard & Sistem Inteligent Predictiv ML")
     
-    # 1. Prepare ML Model Data
     df_ml = df.copy()
     df_ml['price_lag1'] = df_ml[price_col].shift(1)
     df_ml['price_lag2'] = df_ml[price_col].shift(2)
@@ -174,10 +172,8 @@ if page == 'Live Dashboard':
     X = df_ml[['price_lag1', 'price_lag2', 'sent_lag1', 'Nuclear_MW', 'Renewable_MW']]
     y = df_ml[price_col]
     
-    # Train-test split for evaluation
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
     
-    # Train 3 models
     rf = RandomForestRegressor(n_estimators=100, random_state=42)
     rf.fit(X_train, y_train)
     
@@ -187,7 +183,6 @@ if page == 'Live Dashboard':
     ridge = Ridge(alpha=1.0)
     ridge.fit(X_train, y_train)
     
-    # Calculate performance metrics
     metrics = {}
     for name, model in [("Random Forest", rf), ("Linear Regression", lr), ("Ridge Regression", ridge)]:
         y_pred = model.predict(X_test)
@@ -294,7 +289,7 @@ if page == 'Live Dashboard':
     
     for _ in range(15):
         # Predict one step ahead
-        pred_val = active_model.predict([[current_lag1, current_lag2, current_sent, mean_nuclear, mean_renewable]])[0]
+        pred_val = active_model.predict(pd.DataFrame([[current_lag1, current_lag2, current_sent, mean_nuclear, mean_renewable]], columns=['price_lag1', 'price_lag2', 'sent_lag1', 'Nuclear_MW', 'Renewable_MW']))[0]
         future_preds.append(pred_val)
         current_lag2 = current_lag1
         current_lag1 = pred_val
@@ -350,7 +345,7 @@ if page == 'Live Dashboard':
         'Renewable_MW': [sim_renewable]
     })
     
-    sim_prediction = active_model.predict(sim_input)[0]
+    sim_prediction = active_model.predict(pd.DataFrame(sim_input, columns=['price_lag1', 'price_lag2', 'sent_lag1', 'Nuclear_MW', 'Renewable_MW']))[0]
     
     st.markdown(f"""
     <div style="background: rgba(255, 177, 66, 0.1); border: 1px solid #ffb142; border-radius: 12px; padding: 18px; text-align: center; margin-top: 15px;">
@@ -594,7 +589,7 @@ elif page == 'Hartă EU (Date Reale)':
     
     df_eu_disp[f'Cost Estimat Lunar ({symbol})'] = df_eu_disp[f'Preț ({symbol}/MWh)'] * consumption
     st.dataframe(df_eu_disp.style.format({
-        "Preț (EUR/MWh)": "{:.2f}",
+        f"Preț (EUR/MWh)": "{:.2f}",
         f"Preț ({symbol}/MWh)": "{:.2f}",
         f"Cost Estimat Lunar ({symbol})": "{:.2f}"
     }), use_container_width=True)
@@ -664,7 +659,71 @@ elif page == 'Integrare SAS Py & ML':
     st.title("Integrare SAS Viya, SAS Py & SAS ML")
     st.markdown("SAS (Statistical Analysis System) oferă capabilități analitice industriale avansate prin pachetul `saspy` și platforma SAS Viya. Acest modul simulează conectarea Python la un motor SAS și rularea modelelor de Machine Learning specifice SAS (SAS ML) pe setul de date din Referat.")
     
-    # 1. PARAMETERS SELECTION AREA
+    # --- SAS AUTHENTICATION HACK FOR STREAMLIT ---
+    import base64
+    import hashlib
+    import secrets
+    import saspy
+
+    # 1. Initialize PKCE secrets for this session
+    if 'cv' not in st.session_state:
+        st.session_state['cv'] = secrets.token_urlsafe(32)
+    
+    cv = st.session_state['cv']
+    cvh = hashlib.sha256(cv.encode('utf-8')).digest()
+    cc = base64.urlsafe_b64encode(cvh).decode('utf-8').rstrip('=')
+    purl = f"https://vfl-053.engage.sas.com/SASLogon/oauth/authorize?client_id=SASPy&response_type=code&code_challenge_method=S256&code_challenge={cc}"
+
+    st.markdown("### 1. Autentificare SAS Viya for Learners")
+    st.info("Pentru a rula cod SAS real pe serverele educaționale Viya, ai nevoie de un cod de autorizare (AuthCode).")
+    
+    st.markdown(f"**Pasul A:** [Apasă aici pentru a genera codul de autorizare]({purl}) (Se va deschide într-o pagină nouă)")
+    
+    auth_code_input = st.text_input("Pasul B: Lipește AuthCode-ul generat mai sus:", type="password")
+    
+    @st.cache_resource(show_spinner=False)
+    def connect_sas(auth_code, _cv):
+        # Mocking secrets and prompt to intercept saspy's terminal flow
+        original_token_urlsafe = secrets.token_urlsafe
+        def mock_token_urlsafe(nbytes=None):
+            if nbytes == 32:
+                return _cv
+            return original_token_urlsafe(nbytes)
+        secrets.token_urlsafe = mock_token_urlsafe
+        
+        original_prompt = saspy.sasbase.SASconfig._prompt
+        def mock_prompt(self, msg, pw=False):
+            if "default=authcode" in msg.lower():
+                return "authcode"
+            elif "authcode" in msg.lower() or "url" in msg.lower():
+                return auth_code
+            return original_prompt(self, msg, pw)
+        saspy.sasbase.SASconfig._prompt = mock_prompt
+        
+        try:
+            sas = saspy.SASsession(cfgname='viya')
+            return sas
+        except Exception as e:
+            return str(e)
+            
+    if auth_code_input:
+        with st.spinner("Conectare la SAS Viya în curs..."):
+            sas_conn = connect_sas(auth_code_input, cv)
+        
+        if isinstance(sas_conn, str):
+            st.error(f"Eroare la conectare: {sas_conn}")
+            st.session_state['sas_auth_status'] = False
+        else:
+            st.success("✅ Conectat cu succes la SAS Viya for Learners!")
+            st.session_state['sas_auth_status'] = True
+            st.session_state['sas_session'] = sas_conn
+    else:
+        st.session_state['sas_auth_status'] = False
+        st.warning("Te rog introdu AuthCode-ul pentru a debloca zona de rulare.")
+        
+    st.markdown("---")
+
+    # 2. PARAMETERS SELECTION AREA
     st.markdown("### Configurare Parametri Analitici SAS Viya")
     
     col_reg_cfg, col_rf_cfg = st.columns(2)
@@ -685,9 +744,9 @@ elif page == 'Integrare SAS Py & ML':
         )
         col_reg_opt1, col_reg_opt2 = st.columns(2)
         with col_reg_opt1:
-            enable_vif = st.checkbox("Diagnostic coliniaritate (VIF)", value=True, help="Variance Inflation Factor pentru detecția multicoliniarității.")
+            enable_vif = st.checkbox("Diagnostic coliniaritate (VIF)", value=True)
         with col_reg_opt2:
-            enable_clb = st.checkbox("Limite confidențialitate (CLB)", value=True, help="Confidence Limits for Parameter Estimates.")
+            enable_clb = st.checkbox("Limite confidențialitate (CLB)", value=True)
         st.markdown("</div>", unsafe_allow_html=True)
         
     with col_rf_cfg:
@@ -701,7 +760,7 @@ elif page == 'Integrare SAS Py & ML':
         
     st.markdown("<br>", unsafe_allow_html=True)
     
-    # 2. RUN CONTROLLER
+    # 3. RUN CONTROLLER
     st.markdown("### Rularea Modelelor în SAS Viya Engine")
     
     selected_sas_proc = st.selectbox(
@@ -711,22 +770,20 @@ elif page == 'Integrare SAS Py & ML':
          "Rerulează doar PROC HPFOREST (Random Forest)"]
     )
     
-    run_btn = st.button("Lansează Execuția pe Serverul SAS", type="primary")
+    run_btn = st.button("Lansează Execuția pe Serverul SAS", type="primary", disabled=not st.session_state.get('sas_auth_status', False))
     
     tab_run, tab_code, tab_comparison = st.tabs(["Centrul de Rulare SAS ML", "Ghid & Cod SAS Py", "Studiu de Performanță: Python vs. SAS"])
     
     with tab_code:
         st.markdown("### Cum funcționează Integrarea SAS în Python?")
-        st.markdown("""
-        Pachetul `saspy` permite traducerea obiectelor Pandas DataFrame în tabele SAS (`Sastrans`) și rularea procedurilor analitice de înaltă performanță pe servere SAS de clasă enterprise.
-        """)
         
         # Build dynamic SAS code depending on inputs
         method_opt = reg_method.split(" ")[0].lower()
-        method_str = f" / selection={method_opt}" if method_opt != "none" else ""
-        vif_str = " vif" if enable_vif else ""
-        clb_str = " clb" if enable_clb else ""
-        reg_opts = f"{method_str}{vif_str}{clb_str}" if (method_str or vif_str or clb_str) else ""
+        method_str = f"selection={method_opt}" if method_opt != "none" else ""
+        vif_str = "vif" if enable_vif else ""
+        clb_str = "clb" if enable_clb else ""
+        opts_list = [opt for opt in [method_str, vif_str, clb_str] if opt]
+        reg_opts = " / " + " ".join(opts_list) if opts_list else ""
         
         reg_vars_str = " ".join(reg_features) if reg_features else "Nuclear_MW Renewable_MW sent_mean"
         
@@ -764,333 +821,135 @@ run;
         st.info("Codul de mai sus se adaptează automat selecției de parametri și reprezintă sintaxa oficială de integrare SASpy / SAS Viya.")
 
     with tab_run:
-        is_run = run_btn or 'sas_executed' in st.session_state
-        
         if run_btn:
-            st.session_state['sas_executed'] = True
+            sas = st.session_state['sas_session']
             
-            # Animate the running sequence to feel extremely premium and authentic
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            
-            steps = [
-                ("Conectare la SAS Viya CAS Controller la adresa cas.viya.enterprise.local...", 0.15, 0.4),
-                ("Sesiune CAS pornită cu succes (ID: cas-session-129-pulse).", 0.35, 0.2),
-                ("Transfer Pandas DataFrame 'df_daily' în WORK.energy_data (sastrans format)...", 0.50, 0.5),
-                ("Compilare și transmitere cod analitic SAS...", 0.70, 0.3),
-            ]
-            
-            if "REG" in selected_sas_proc or "simultan" in selected_sas_proc:
-                steps.append(("Se rulează PROC REG pe serverul SAS Viya...", 0.85, 0.8))
-            if "HPFOREST" in selected_sas_proc or "simultan" in selected_sas_proc:
-                steps.append(("Se rulează PROC HPFOREST (antrenare paralelizată CAS)...", 0.95, 1.2))
+            with st.spinner("Se transferă datele spre SAS și se execută procedurile..."):
+                # Clean dataframe to avoid SAS transfer issues
+                df_clean = df.copy().dropna()
+                # Remove spaces from column names just in case
+                df_clean.columns = [str(c).replace(" ", "_") for c in df_clean.columns]
                 
-            import time
-            for msg, progress, duration in steps:
-                status_text.text(msg)
-                progress_bar.progress(int(progress * 100))
-                time.sleep(duration * 0.5) # slightly accelerated for snappiness
+                # 1. Data transfer
+                sas.df2sd(df_clean, table='energy_data', libref='WORK')
                 
-            status_text.text("Execuție finalizată cu succes pe serverul SAS Enterprise!")
-            progress_bar.progress(100)
-            
+                # 2. Build code
+                sas_code = ""
+                if "REG" in selected_sas_proc or "simultan" in selected_sas_proc:
+                    sas_code += f"""
+ods graphics on;
+proc reg data=WORK.energy_data;
+    model Price_EUR = {reg_vars_str}{reg_opts};
+    ods output ParameterEstimates=WORK.reg_params FitStatistics=WORK.reg_fit ANOVA=WORK.reg_anova;
+run;
+"""
+                if "HPFOREST" in selected_sas_proc or "simultan" in selected_sas_proc:
+                    sas_code += f"""
+proc hpforest data=WORK.energy_data 
+              maxtrees={rf_maxtrees} 
+              maxdepth={rf_maxdepth} 
+              vars_to_try={rf_vars_to_try};
+    target Price_EUR / level=interval;
+    input Nuclear_MW Renewable_MW sent_mean / level=interval;
+    ods output FitStatistics=WORK.fit_stats VariableImportance=WORK.var_imp;
+run;
+"""
+                # 3. Submit code
+                res = sas.submit(sas_code)
+                st.session_state['sas_last_log'] = res['LOG']
+                
+                # 4. Retrieve tables
+                results = {}
+                if "REG" in selected_sas_proc or "simultan" in selected_sas_proc:
+                    try:
+                        results['reg_params'] = sas.sd2df('REG_PARAMS', 'WORK')
+                        results['reg_fit'] = sas.sd2df('REG_FIT', 'WORK')
+                        results['reg_anova'] = sas.sd2df('REG_ANOVA', 'WORK')
+                    except Exception as e:
+                        results['reg_error'] = str(e)
+                if "HPFOREST" in selected_sas_proc or "simultan" in selected_sas_proc:
+                    try:
+                        results['fit_stats'] = sas.sd2df('FIT_STATS', 'WORK')
+                        results['var_imp'] = sas.sd2df('VAR_IMP', 'WORK')
+                    except Exception as e:
+                        results['rf_error'] = str(e)
+                        
+                st.session_state['sas_results'] = results
+                st.session_state['sas_executed'] = True
+                
+        is_run = st.session_state.get('sas_executed', False)
+        
         if is_run:
-            # Let's display the logs and outputs dynamically
+            st.success("Execuție finalizată cu succes pe serverul SAS Enterprise!")
             
             # LOGS DISPLAY
-            st.markdown("#### SAS Execution Log (Jurnal de Rulare)")
-            log_output = "1    options cashost='cas.viya.enterprise.local' casport=5570;\n2    cas mySession sessopts=(caslib='CASUSER' timeout=3600);\nNOTE: The session mySession has been connected successfully.\n"
+            st.markdown("#### SAS Execution Log (Jurnal Oficial de Rulare)")
+            st.code(st.session_state.get('sas_last_log', 'N/A'), language='sas')
             
-            if "REG" in selected_sas_proc or "simultan" in selected_sas_proc:
-                method_opt = reg_method.split(" ")[0].lower()
-                method_str = f" / selection={method_opt}" if method_opt != "none" else ""
-                vif_str = " vif" if enable_vif else ""
-                clb_str = " clb" if enable_clb else ""
-                reg_vars_str = " ".join(reg_features) if reg_features else "Nuclear_MW Renewable_MW sent_mean"
-                
-                log_output += f"""
-3    proc reg data=WORK.energy_data;
-4        model Price_EUR = {reg_vars_str}{method_str}{vif_str}{clb_str};
-5        ods output ParameterEstimates=WORK.reg_params FitStatistics=WORK.reg_fit;
-6    run;
-
-NOTE: The model has been successfully trained on {int(len(df) * (rf_train_ratio/100))} observations.
-NOTE: The data set WORK.REG_PARAMS has {len(reg_features) + 1} observations and 8 variables.
-NOTE: The data set WORK.REG_FIT has 1 observations and 4 variables.
-NOTE: PROCEDURE REG used (Total process time):
-      real time           0.14 seconds
-      cpu time            0.18 seconds
-"""
-            if "HPFOREST" in selected_sas_proc or "simultan" in selected_sas_proc:
-                log_output += f"""
-7    proc hpforest data=WORK.energy_data maxtrees={rf_maxtrees} maxdepth={rf_maxdepth} vars_to_try={rf_vars_to_try};
-8        target Price_EUR / level=interval;
-9        input Nuclear_MW Renewable_MW sent_mean / level=interval;
-10       ods output FitStatistics=WORK.fit_stats VariableImportance=WORK.var_imp;
-11   run;
-
-NOTE: The HPFOREST procedure is executing in single-machine mode.
-NOTE: The training data has {int(len(df) * (rf_train_ratio/100))} observations.
-NOTE: OOB (Out-of-Bag) error evaluation active.
-NOTE: The model has been successfully trained.
-NOTE: The data set WORK.FIT_STATS has {rf_maxtrees} observations and 4 variables.
-NOTE: The data set WORK.VAR_IMP has 3 observations and 5 variables.
-NOTE: PROCEDURE HPFOREST used (Total process time):
-      real time           0.58 seconds
-      cpu time            0.82 seconds
-"""
-            st.code(log_output, language='sas')
+            results = st.session_state.get('sas_results', {})
+            
+            
+            st.markdown("### SAS Log")
+            st.code(st.session_state.get('sas_last_log', 'No log found'), language='sas')
             
             # --- SECTION 1: PROC REG RESULTS ---
-            if "REG" in selected_sas_proc or "simultan" in selected_sas_proc:
+
+            if ("REG" in selected_sas_proc or "simultan" in selected_sas_proc):
                 st.markdown("---")
                 st.markdown("### SAS PROC REG (Multiple Linear Regression) Results")
-                
-                # Dynamic ANOVA calculation based on selected features
-                # Let's create realistic stats
-                df_clean = df.dropna()
-                X_reg = df_clean[reg_features]
-                y_reg = df_clean[price_col]
-                
-                lr_sas = LinearRegression()
-                lr_sas.fit(X_reg, y_reg)
-                y_pred_reg = lr_sas.predict(X_reg)
-                
-                r2_reg = r2_score(y_reg, y_pred_reg)
-                mae_reg = mean_absolute_error(y_reg, y_pred_reg)
-                mse_reg = np.mean((y_reg - y_pred_reg) ** 2)
-                
-                # ANOVA Table
-                df_model = len(reg_features)
-                df_error = len(df_clean) - df_model - 1
-                df_total = len(df_clean) - 1
-                
-                ss_total = np.sum((y_reg - np.mean(y_reg)) ** 2)
-                ss_model = np.sum((y_pred_reg - np.mean(y_reg)) ** 2)
-                ss_error = ss_total - ss_model
-                
-                ms_model = ss_model / df_model
-                ms_error = ss_error / df_error
-                f_value = ms_model / ms_error
-                
-                st.markdown("#### ODS Table: Analysis of Variance (Tabelul ANOVA)")
-                st.caption("Evaluează dacă modelul de regresie în ansamblu este statistic semnificativ:")
-                
-                anova_df = pd.DataFrame({
-                    "Source": ["Model", "Error", "Corrected Total"],
-                    "DF": [df_model, df_error, df_total],
-                    "Sum of Squares": [f"{ss_model:,.2f}", f"{ss_error:,.2f}", f"{ss_total:,.2f}"],
-                    "Mean Square": [f"{ms_model:,.2f}", f"{ms_error:,.2f}", ""],
-                    "F Value": [f"{f_value:.2f}", "", ""],
-                    "Pr > F": ["<.0001" if f_value > 10 else f"{1 - f_value:.4f}", "", ""]
-                })
-                st.table(anova_df)
-                
-                # Fit Statistics Table
-                st.markdown("#### ODS Table: Fit Statistics (Statistici de Potrivire)")
-                fit_stats_df = pd.DataFrame({
-                    "Metrică SAS": ["Root MSE", "Dependent Mean (Media Prețului)", "Coeff Var (Coeficient Variație)", "R-Square (R²)", "Adj R-Sq (R² Ajustat)"],
-                    "Valoare": [
-                        f"{np.sqrt(ms_error):.4f}",
-                        f"{np.mean(y_reg):.4f}",
-                        f"{(np.sqrt(ms_error)/np.mean(y_reg))*100:.4f}%",
-                        f"{r2_reg:.4f}",
-                        f"{1 - (1-r2_reg)*(df_total)/df_error:.4f}"
-                    ]
-                })
-                st.table(fit_stats_df)
-                
-                # Parameter Estimates Table
-                st.markdown("#### ODS Table: Parameter Estimates (Estimarea Parametrilor)")
-                st.caption("Evaluează impactul fiecărui predictor ales. Un VIF > 5 indică multicoliniaritate ridicată.")
-                
-                # Calculate standard errors and t-values approximately
-                coefs = lr_sas.coef_
-                intercept = lr_sas.intercept_
-                
-                # Generate realistic errors
-                np.random.seed(10)
-                std_errors = [np.abs(c) * 0.15 + 0.001 for c in coefs]
-                intercept_err = np.abs(intercept) * 0.08
-                
-                t_values = [c/se for c, se in zip(coefs, std_errors)]
-                intercept_t = intercept / intercept_err
-                
-                param_names = ["Intercept"] + reg_features
-                param_estimates = [intercept] + list(coefs)
-                param_errors = [intercept_err] + std_errors
-                param_t = [intercept_t] + t_values
-                
-                param_rows = []
-                for name, est, err, t_val in zip(param_names, param_estimates, param_errors, param_t):
-                    p_val = "<.0001" if np.abs(t_val) > 4 else f"{2*(1-0.95):.4f}"
-                    row = {
-                        "Variable": name,
-                        "DF": 1,
-                        "Parameter Estimate": f"{est:.5f}",
-                        "Standard Error": f"{err:.5f}",
-                        "t Value": f"{t_val:.2f}",
-                        "Pr > |t|": p_val
-                    }
-                    if enable_clb:
-                        row["95% Lower CL"] = f"{est - 1.96*err:.5f}"
-                        row["95% Upper CL"] = f"{est + 1.96*err:.5f}"
-                    if enable_vif:
-                        # VIF calculation approximation (correlated inputs)
-                        if name == "Intercept":
-                            row["VIF"] = ""
-                        elif name in ["Nuclear_MW", "Renewable_MW"]:
-                            row["VIF"] = f"{1.45:.3f}"
-                        elif name == "sent_mean":
-                            row["VIF"] = f"{1.12:.3f}"
-                        else:
-                            row["VIF"] = f"{1.05:.3f}"
-                    param_rows.append(row)
+                if 'reg_error' in results:
+                    st.error("Eroare la preluarea tabelelor PROC REG: " + results['reg_error'] + "\nLOG SAS:\n" + str(st.session_state.get('sas_last_log', 'Fara LOG')))
+                else:
+                    st.markdown("#### ODS Table: Analysis of Variance (Tabelul ANOVA)")
+                    st.dataframe(results.get('reg_anova'), use_container_width=True)
                     
-                st.table(pd.DataFrame(param_rows))
+                    st.markdown("#### ODS Table: Fit Statistics (Statistici de Potrivire)")
+                    st.dataframe(results.get('reg_fit'), use_container_width=True)
+                    
+                    st.markdown("#### ODS Table: Parameter Estimates (Estimarea Parametrilor)")
+                    st.dataframe(results.get('reg_params'), use_container_width=True)
                 
             # --- SECTION 2: PROC HPFOREST RESULTS ---
-            if "HPFOREST" in selected_sas_proc or "simultan" in selected_sas_proc:
+            if ("HPFOREST" in selected_sas_proc or "simultan" in selected_sas_proc):
                 st.markdown("---")
                 st.markdown("### SAS PROC HPFOREST (High Performance Forest) Results")
-                
-                df_clean = df.dropna()
-                X_rf = df_clean[["Nuclear_MW", "Renewable_MW", "sent_mean"]]
-                y_rf = df_clean[price_col]
-                
-                # Train a Scikit-Learn RandomForest corresponding to SAS selected parameters
-                rf_sas = RandomForestRegressor(
-                    n_estimators=rf_maxtrees, 
-                    max_depth=rf_maxdepth, 
-                    max_features=min(rf_vars_to_try, X_rf.shape[1]), 
-                    random_state=42
-                )
-                
-                # Train/test split simulation based on user selection
-                split_idx = int(len(df_clean) * (rf_train_ratio/100))
-                X_train, X_test = X_rf.iloc[:split_idx], X_rf.iloc[split_idx:]
-                y_train, y_test = y_rf.iloc[:split_idx], y_rf.iloc[split_idx:]
-                
-                rf_sas.fit(X_train, y_train)
-                y_pred_rf = rf_sas.predict(X_rf)
-                
-                mae_rf = mean_absolute_error(y_rf, y_pred_rf)
-                r2_rf = r2_score(y_rf, y_pred_rf)
-                
-                col_s1, col_s2 = st.columns(2)
-                
-                with col_s1:
-                    st.markdown("**Statistici de potrivire SAS OOB (Fit Statistics)**")
-                    # Generate a realistic fit statistics progression based on maxtrees
-                    trees_arr = np.arange(1, rf_maxtrees + 1)
-                    np.random.seed(42)
-                    base_error = 240.0 / (trees_arr ** 0.28)
-                    noise_error = np.random.normal(0, 0.35, len(trees_arr))
-                    oob_mse = base_error + noise_error
-                    # Smooth out a bit
-                    for i in range(1, len(oob_mse)):
-                        oob_mse[i] = oob_mse[i-1]*0.92 + oob_mse[i]*0.08
+                if 'rf_error' in results:
+                    st.error("Eroare la preluarea tabelelor PROC HPFOREST: " + results['rf_error'])
+                    st.warning("Notă: E posibil ca modulul HPFOREST să necesite activarea serverului CAS pe contul tău Viya for Learners, sau pachetul SAS Visual Data Mining and Machine Learning (VDMML) să nu fie alocat pentru sesiunea ta.")
+                else:
+                    col_s1, col_s2 = st.columns(2)
+                    
+                    with col_s1:
+                        st.markdown("**Statistici de potrivire SAS OOB (Fit Statistics)**")
+                        df_sas_fit = results.get('fit_stats')
+                        if df_sas_fit is not None and not df_sas_fit.empty:
+                            if 'NTrees' in df_sas_fit.columns and 'MiscAll' in df_sas_fit.columns:
+                                fig_sas_fit = px.line(df_sas_fit, x="NTrees", y="MiscAll", 
+                                                      title=f"SAS OOB Error Rate Convergence")
+                                fig_sas_fit.update_traces(line=dict(color="#e94560", width=2.5))
+                                fig_sas_fit.update_layout(template="plotly_dark", plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)')
+                                st.plotly_chart(fig_sas_fit, use_container_width=True)
+                            else:
+                                st.dataframe(df_sas_fit, use_container_width=True)
                         
-                    df_sas_fit = pd.DataFrame({"Arbori (Trees)": trees_arr, "OOB Error (MSE)": oob_mse})
-                    
-                    fig_sas_fit = px.line(df_sas_fit, x="Arbori (Trees)", y="OOB Error (MSE)", 
-                                          title=f"SAS OOB Error Rate Convergence (maxtrees={rf_maxtrees})")
-                    fig_sas_fit.update_traces(line=dict(color="#e94560", width=2.5))
-                    fig_sas_fit.update_layout(template="plotly_dark", plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)')
-                    st.plotly_chart(fig_sas_fit, use_container_width=True)
-                    
-                with col_s2:
-                    st.markdown("**Importanța Variabilelor SAS (ODS: VariableImportance)**")
-                    # Scale importances slightly depending on maxdepth
-                    base_imp = [0.55 + 0.002*rf_maxdepth, 0.29 - 0.001*rf_maxdepth, 0.16 - 0.001*rf_maxdepth]
-                    # Normalize
-                    base_imp = [b / sum(base_imp) for b in base_imp]
-                    
-                    sas_imp = pd.DataFrame({
-                        "Variabilă": ["Renewable_MW", "sent_mean", "Nuclear_MW"],
-                        "OOB Gini Importance": base_imp
-                    }).sort_values(by="OOB Gini Importance", ascending=True)
-                    
-                    fig_sas_imp = px.bar(sas_imp, x="OOB Gini Importance", y="Variabilă", orientation='h',
-                                         color="OOB Gini Importance", color_continuous_scale="Plasma",
-                                         title="SAS Gini Node Splitting Importance Score")
-                    fig_sas_imp.update_layout(template="plotly_dark", plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)')
-                    st.plotly_chart(fig_sas_imp, use_container_width=True)
-                
-                # Model Info Table
-                st.markdown("#### ODS Table: Model Information")
-                model_info_df = pd.DataFrame({
-                    "Parametru Model": ["Număr total de arbori", "Adâncimea maximă a nodului", "Variabile candidate per split", "Număr de observații antrenare", "Criteriu diviziune", "Tip variabilă target"],
-                    "Valoare": [str(rf_maxtrees), str(rf_maxdepth), str(rf_vars_to_try), str(len(X_train)), "Gini Reduction / MSE", "Interval / Numeric continuu"]
-                })
-                st.table(model_info_df)
-                
-            # --- SECTION 3: DYNAMIC COMPARATIVE TIMELINE CHART ---
-            st.markdown("---")
-            st.markdown("### Analiză Comparativă a Predicțiilor SAS în Timp (REG vs. HPFOREST)")
-            st.caption("Alege intervalul calendaristic pentru a vedea potrivirea în timp real a ambelor proceduri SAS comparativ cu prețul real spot:")
-            
-            min_date = datetime.date(2025, 1, 1)
-            max_date = df.index.max().date()
-            
-            selected_dates_sas = st.slider(
-                "Interval vizualizare comparativă (2025-2026):",
-                min_value=min_date,
-                max_value=max_date,
-                value=(min_date, max_date),
-                format="DD.MM.YYYY",
-                key="sas_dates_picker"
-            )
-            
-            if isinstance(selected_dates_sas, tuple) and len(selected_dates_sas) == 2:
-                start_d, end_d = selected_dates_sas
-            else:
-                start_d, end_d = min_date, max_date
-                
-            df_plot_sas = df[(df.index.date >= start_d) & (df.index.date <= end_d)].copy()
-            df_plot_sas = df_plot_sas.ffill().bfill().dropna()
-            
-            if not df_plot_sas.empty:
-                # Recalculate predictions on the plotted range
-                fig_comp_sas = go.Figure()
-                fig_comp_sas.add_trace(go.Scatter(x=df_plot_sas.index, y=df_plot_sas[price_col], name="Preț Spot Real RO", line=dict(color='#ffffff', width=2.5)))
-                
-                if "REG" in selected_sas_proc or "simultan" in selected_sas_proc:
-                    # Regression line matching the selected features
-                    reg_vals = lr_sas.predict(df_plot_sas[reg_features])
-                    fig_comp_sas.add_trace(go.Scatter(x=df_plot_sas.index, y=reg_vals, name=f"Predictat SAS PROC REG (R² = {r2_reg:.3f})", line=dict(color='#ffb142', width=2, dash='dot')))
-                    
-                if "HPFOREST" in selected_sas_proc or "simultan" in selected_sas_proc:
-                    # Forest predictions matching selected parameters
-                    rf_vals = rf_sas.predict(df_plot_sas[["Nuclear_MW", "Renewable_MW", "sent_mean"]])
-                    fig_comp_sas.add_trace(go.Scatter(x=df_plot_sas.index, y=rf_vals, name=f"Predictat SAS PROC HPFOREST (R² = {r2_rf:.3f})", line=dict(color='#e94560', width=2, dash='dash')))
-                    
-                fig_comp_sas.update_layout(
-                    template="plotly_dark", 
-                    plot_bgcolor='rgba(0,0,0,0)', 
-                    paper_bgcolor='rgba(0,0,0,0)',
-                    xaxis_title="Dată",
-                    yaxis_title="Preț Spot (EUR/MWh)",
-                    title="Analiza dinamică a potrivirii modelelor SAS pe setul de date istoric",
-                    hovermode="x unified"
-                )
-                st.plotly_chart(fig_comp_sas, use_container_width=True)
-                
-                # Dynamic metrics highlights
-                m1, m2, m3 = st.columns(3)
-                with m1:
-                    st.metric("Preț Mediu Spot Real", f"{df_plot_sas[price_col].mean():.2f} EUR/MWh")
-                with m2:
-                    if "REG" in selected_sas_proc or "simultan" in selected_sas_proc:
-                        st.metric("Eroare Medie (MAE) - SAS REG", f"{mae_reg:.2f} EUR", delta=f"R²: {r2_reg:.3f}")
-                with m3:
-                    if "HPFOREST" in selected_sas_proc or "simultan" in selected_sas_proc:
-                        st.metric("Eroare Medie (MAE) - SAS HPFOREST", f"{mae_rf:.2f} EUR", delta=f"R²: {r2_rf:.3f}")
-            else:
-                st.warning("Nu există date în intervalul selectat.")
-                
+                    with col_s2:
+                        st.markdown("**Importanța Variabilelor SAS (ODS: VariableImportance)**")
+                        df_var_imp = results.get('var_imp')
+                        if df_var_imp is not None and not df_var_imp.empty:
+                            if 'Variable' in df_var_imp.columns and 'Gini' in df_var_imp.columns:
+                                df_var_imp = df_var_imp.sort_values(by="Gini", ascending=True)
+                                fig_sas_imp = px.bar(df_var_imp, x="Gini", y="Variable", orientation='h',
+                                                     color="Gini", color_continuous_scale="Plasma",
+                                                     title="SAS Gini Node Splitting Importance Score")
+                                fig_sas_imp.update_layout(template="plotly_dark", plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)')
+                                st.plotly_chart(fig_sas_imp, use_container_width=True)
+                            else:
+                                st.dataframe(df_var_imp, use_container_width=True)
         else:
-            st.info("Lansează execuția pe butonul roșu de mai sus pentru a simula trimiterea tabelelor și compilarea procedurilor SAS ML în cloud.")
+            if st.session_state.get('sas_auth_status', False):
+                st.info("Apasă pe 'Lansează Execuția pe Serverul SAS' pentru a rula codul.")
+            else:
+                st.info("Autentifică-te mai întâi cu SAS Viya pentru a putea lansa execuția.")
 
     with tab_comparison:
         st.markdown("### Python (Scikit-Learn) vs. SAS Viya Enterprise ML")
@@ -1099,7 +958,6 @@ NOTE: PROCEDURE HPFOREST used (Total process time):
         Mai jos este prezentată o comparație conceptuală de performanță pe seturi de date de mari dimensiuni (ex. 10+ ani de date orare de consum energetic regional):
         """)
         
-        # Benchmark charts
         b_col1, b_col2 = st.columns(2)
         
         with b_col1:
@@ -1122,11 +980,10 @@ NOTE: PROCEDURE HPFOREST used (Total process time):
             })
             st.table(comparison_table)
             
-        # Explanatory Info Box
         st.info("""
-        **De ce există mici diferențe de predictibilitate între modelul local Python și serverul SAS?**
-        1. **Criterii de Divizare (Splitting):** Scikit-Learn `RandomForestRegressor` divizează nodurile prin minimizarea erorii pătratice medii (MSE) într-un mod localizator, în timp ce `PROC HPFOREST` din SAS utilizează o evaluare suplimentară pe baza OOB (Out-of-Bag) pe parcursul antrenării pentru a pre-prune crengile ineficiente.
-        2. **Gestiunea Multicoliniarității:** În regresie, SAS verifică nativ matricile de covarianță și elimină automat variabilele perfect coliniare (prin toleranță zero), oferind coeficienți mai robuști statistic în PROC REG.
+        **De ce se preferă SAS Enterprise?**
+        1. **Robustețe:** Metodele ODS (Output Delivery System) oferă standarde de diagnostic unice (ex. tabele ANOVA direct formatate, intervale de confidențialitate stricte).
+        2. **Scalabilitate:** Procedurile HP (High-Performance) din SAS împart nativ arborii de decizie pe mai multe servere simultan, ceea ce este indispensabil la Big Data corporativ.
         """)
 
 elif page == 'Briefing AI (Live)':
@@ -1193,11 +1050,13 @@ elif page == 'Briefing AI (Live)':
             """
         elif "scumpă" in q_low or "scumpa" in q_low or "pret" in q_low or "preț" in q_low:
             # Find most expensive country in current API list
-            if not df_eu.empty:
-                max_row = df_eu.loc[df_eu['Preț (EUR/MWh)'].idxmax()]
+            valid_prices = {k: v for k, v in real_eu_prices.items() if v is not None}
+            if valid_prices:
+                max_country = max(valid_prices, key=valid_prices.get)
+                max_price = valid_prices[max_country]
                 response_text = f"""
-                Pe baza datelor prelevate în direct prin API-ul ENTSO-E/Energy-Charts, cea mai scumpă țară analizată în acest moment este **{max_row['Țară']}**, având un preț spot de **{max_row['Preț (EUR/MWh)']:.2f} EUR/MWh**. 
-                Prin comparație, în România prețul spot actual este de **{current_price:.1f} EUR/MWh**, ceea ce ne plasează pe o poziție {'competitivă' if current_price < max_row['Preț (EUR/MWh)'] else 'ridicată'} regional.
+                Pe baza datelor prelevate în direct prin API-ul ENTSO-E/Energy-Charts, cea mai scumpă țară analizată în acest moment este **{max_country}**, având un preț spot de **{max_price:.2f} EUR/MWh**. 
+                Prin comparație, în România prețul spot actual este de **{current_price:.1f} EUR/MWh**, ceea ce ne plasează pe o poziție {'competitivă' if current_price < max_price else 'ridicată'} regional.
                 """
             else:
                 response_text = "Nu am putut prelua datele live ale prețurilor din Europa în acest moment pentru a stabili clasamentul exact. Vă rugăm să reîncărcați pagina."
