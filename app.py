@@ -672,17 +672,27 @@ elif page == 'Integrare SAS Py & ML':
     cv = st.session_state['cv']
     cvh = hashlib.sha256(cv.encode('utf-8')).digest()
     cc = base64.urlsafe_b64encode(cvh).decode('utf-8').rstrip('=')
-    purl = f"https://vfl-053.engage.sas.com/SASLogon/oauth/authorize?client_id=SASPy&response_type=code&code_challenge_method=S256&code_challenge={cc}"
+    server_url_input = st.text_input("Pasul 1: Introdu URL-ul serverului tău SAS Viya:", value="https://vfl-053.engage.sas.com")
+    server_url_input = server_url_input.rstrip('/')
+    purl = f"{server_url_input}/SASLogon/oauth/authorize?client_id=SASPy&response_type=code&code_challenge_method=S256&code_challenge={cc}"
 
     st.markdown("### 1. Autentificare SAS Viya for Learners")
     st.info("Pentru a rula cod SAS real pe serverele educaționale Viya, ai nevoie de un cod de autorizare (AuthCode).")
     
-    st.markdown(f"**Pasul A:** [Apasă aici pentru a genera codul de autorizare]({purl}) (Se va deschide într-o pagină nouă)")
+    st.markdown(f"**Pasul 2:** [Apasă aici pentru a genera codul de autorizare]({purl}) (Se va deschide într-o pagină nouă)")
     
-    auth_code_input = st.text_input("Pasul B: Lipește AuthCode-ul generat mai sus:", type="password")
+    auth_code_input = st.text_input("Pasul 3: Lipește AuthCode-ul generat la Pasul 2:", type="password")
     
     @st.cache_resource(show_spinner=False)
-    def connect_sas(auth_code, _cv):
+    def connect_sas(auth_code, _cv, server_url):
+        import os, tempfile
+        cfg_content = f"""
+SAS_config_names=['viya']
+viya = {{'url': '{server_url}', 'context': 'SAS Studio compute context', 'authkey': 'saspy_viya', 'client_id': 'SASPy'}}
+"""
+        tf = tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8')
+        tf.write(cfg_content)
+        tf.close()
         # Mocking secrets and prompt to intercept saspy's terminal flow
         original_token_urlsafe = secrets.token_urlsafe
         def mock_token_urlsafe(nbytes=None):
@@ -701,14 +711,15 @@ elif page == 'Integrare SAS Py & ML':
         saspy.sasbase.SASconfig._prompt = mock_prompt
         
         try:
-            sas = saspy.SASsession(cfgname='viya')
+            sas = saspy.SASsession(cfgname='viya', cfgfile=tf.name)
+            os.remove(tf.name)
             return sas
         except Exception as e:
             return str(e)
             
-    if auth_code_input:
+    if auth_code_input and server_url_input:
         with st.spinner("Conectare la SAS Viya în curs..."):
-            sas_conn = connect_sas(auth_code_input, cv)
+            sas_conn = connect_sas(auth_code_input, cv, server_url_input)
         
         if isinstance(sas_conn, str):
             st.error(f"Eroare la conectare: {sas_conn}")
